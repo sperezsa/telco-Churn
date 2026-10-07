@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Ignorar todo lo que esté dentro de data/
+data/*
+
+# Excepto el archivo .gitkeep
+!data/.gitkeep
