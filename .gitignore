@@ -14,3 +14,15 @@ data/*
 
 # Excepto el archivo .gitkeep
 !data/.gitkeep
+
+# Entrenamiento y tracking locales
+models/*
+!models/.gitkeep
+mlruns/
+mlflow.db
+mlartifacts/
+feature_store/data/
+feature_store/registry.db
+feature_store/online_store.db
+__pycache__/
+.pytest_cache/
