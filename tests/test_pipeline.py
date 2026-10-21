@@ -2,7 +2,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from telco_churn.evaluate import build_psi_reference, calculate_metrics
+from telco_churn.evaluate import (
+    build_psi_reference,
+    calculate_metrics,
+    calculate_population_stability_index,
+)
 from telco_churn.preprocessing import make_preprocessor, split_features_target
 
 
@@ -115,3 +119,39 @@ def test_build_psi_reference_rejects_missing_features() -> None:
             pd.DataFrame({"tenure": [1, 2]}),
             feature_names=["Contract"],
         )
+
+
+def test_psi_is_zero_when_current_data_matches_reference_distribution() -> None:
+    """Use the stored cuts to reproduce the same distribution without drift."""
+    training = pd.DataFrame(
+        {
+            "Contract": [1, 1, 2, 3, 3],
+            "MonthlyCharges": [10.0, 20.0, 30.0, 40.0, 50.0],
+        }
+    )
+    reference = build_psi_reference(
+        training,
+        feature_names=["Contract", "MonthlyCharges"],
+        bin_count=4,
+    )
+
+    psi = calculate_population_stability_index(reference, training)
+
+    assert psi["Contract"] == pytest.approx(0)
+    assert psi["MonthlyCharges"] == pytest.approx(0)
+
+
+def test_psi_counts_unseen_categories_as_population_shift() -> None:
+    """Put values outside the reference categories in a separate PSI bucket."""
+    reference = build_psi_reference(
+        pd.DataFrame({"feature": [0, 0, 0, 1, 1, 1]}),
+        feature_names=["feature"],
+        bin_count=10,
+    )
+
+    psi = calculate_population_stability_index(
+        reference,
+        pd.DataFrame({"feature": [0, 0, 99, 99, 99, 99]}),
+    )
+
+    assert psi["feature"] > 0.2

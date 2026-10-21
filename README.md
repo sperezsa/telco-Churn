@@ -138,9 +138,12 @@ Esté método arroja un volumen de `36` Falsos Negativos (Clientes Perdidos) que
 ```text
 ├── api/                         # API REST de predicción
 ├── config/                      # Configuración del modelo y entrenamiento
-├── data/                        # Dataset y artefactos locales (ignorados por Git)
+├── data/
+│   ├── examples/                # CSV de ejemplo para log y CRM
+│   └── monitoring/              # SQLite local (ignorado por Git)
 ├── feature_store/               # Configuración local de Feast
 ├── models/                      # Artefactos de modelo locales (ignorados por Git)
+├── monitoring/                  # Procesos PSI y evaluación de rendimiento
 ├── notebooks/                   # Documentación y notebooks del proyecto
 ├── src/telco_churn/
 │   ├── data_loader.py            # Carga y validación de los datos
@@ -234,6 +237,51 @@ La documentación interactiva estará disponible en `http://127.0.0.1:8000/docs`
 El endpoint `POST /predict` recibe las columnas de cliente excepto `Churn` y
 devuelve la predicción binaria, probabilidad y umbral aplicado. `GET /health`
 informa la URI de modelo MLflow cargada.
+
+### Monitorización PSI y rendimiento del modelo
+
+La API registra cada predicción en `data/monitoring/monitoring.db`, tabla
+`log_inferencia`: timestamp UTC, `customer_id`, payload original, probabilidad,
+clase predicha, umbral y versión concreta del modelo. La tabla `clientes_crm`
+guarda la etiqueta real y el estado del cliente por fecha de instantánea.
+Al inicializar la base se cargan los CSV de ejemplo de `data/examples/` solo si
+la tabla correspondiente está vacía. Sustituye/actualiza la instantánea CRM con
+los datos de negocio antes de ejecutar la evaluación para usar el estado real.
+Para importar una nueva foto de cartera, prepara el CSV con las columnas
+`customer_id,snapshot_date,churn_actual,customer_status` (fechas ISO y estado
+`active`/`churned`) y ejecuta:
+
+```powershell
+uv run python -m monitoring.load_crm --file data/examples/clientes_crm.csv
+```
+
+La importación hace upsert por cliente y fecha, así que conserva snapshots
+históricos y permite reemplazar registros de la misma fecha.
+
+Mantén MLflow activo y ejecuta desde la raíz del repositorio:
+
+```powershell
+uv run python -m monitoring.psi
+uv run python -m monitoring.performance_model
+```
+
+Ambos procesos seleccionan los registros de la **semana natural completa
+anterior (lunes 00:00 UTC a lunes siguiente, fin exclusivo)**. PSI transforma
+los payloads de esa semana con el pipeline correspondiente a la versión que
+generó cada inferencia, reutiliza el baseline `explainability/psi_reference.json`
+de dicha versión y registra una métrica `psi_<feature>` por top feature. Los
+estados se asignan como `OK` para PSI < 0.1, `Warning` para 0.1 ≤ PSI < 0.2 y
+`Alert` para PSI ≥ 0.2. En el experimento MLflow
+`telco-churn-model-monitoring` también queda un CSV de auditoría con timestamp,
+modelo, versión, feature, PSI y estado.
+
+El proceso de rendimiento cruza esas mismas inferencias con la última
+instantánea CRM disponible a la fecha de evaluación. Registra en el mismo
+experimento accuracy, precision, recall, F1, ROC-AUC, PR-AUC y los cuatro
+valores de la matriz de confusión, más un CSV de las filas cruzadas. Así se
+compara la predicción de la semana `t-1` con el estado CRM actual; los datos de
+ejemplo cubren la semana del 12 al 18 de octubre de 2026 y la instantánea del
+21 de octubre de 2026 para demostrar esa ventana temporal.
 
 ### Notebook exploratorio
 

@@ -24,3 +24,10 @@ mlflow:
   experiment_name: telco-churn-xgboost
   registered_model_name: telco-churn-xgboost
   model_alias: champion
+
+monitoring:
+  experiment_name: telco-churn-model-monitoring
+  database_path: data/monitoring/monitoring.db
+  psi:
+    ok_below: 0.1
+    warning_below: 0.2

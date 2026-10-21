@@ -2,6 +2,7 @@
 
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -11,7 +12,11 @@ from pydantic import BaseModel, ConfigDict
 from sklearn.pipeline import Pipeline
 
 import mlflow
-from telco_churn.config import DEFAULT_CONFIG_PATH, load_config
+from telco_churn.config import DEFAULT_CONFIG_PATH, load_config, project_path
+from telco_churn.monitoring_store import (
+    initialize_monitoring_store,
+    log_inference,
+)
 
 
 class CustomerInput(BaseModel):
@@ -20,7 +25,7 @@ class CustomerInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Keep the customer identifier for the response, but never pass it to XGBoost.
-    customerID: str | None = None
+    customerID: str
     gender: str
     SeniorCitizen: int
     Partner: str
@@ -54,6 +59,7 @@ def create_app(model_uri: str | None = None) -> FastAPI:
         "MODEL_URI", f"models:/{registered_model_name}@{model_alias}"
     )
     decision_threshold = float(config["training"]["decision_threshold"])
+    database_path = project_path(config["monitoring"]["database_path"])
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -67,6 +73,17 @@ def create_app(model_uri: str | None = None) -> FastAPI:
             )
         app.state.model = loaded_model
         app.state.model_uri = resolved_model_uri
+        app.state.model_name = registered_model_name
+        app.state.model_version = str(
+            mlflow.MlflowClient().get_model_version_by_alias(
+                registered_model_name, model_alias
+            ).version
+        )
+        initialize_monitoring_store(
+            database_path=database_path,
+            sample_model_name=registered_model_name,
+            sample_model_version=app.state.model_version,
+        )
         yield
 
     app = FastAPI(
@@ -90,10 +107,23 @@ def create_app(model_uri: str | None = None) -> FastAPI:
         if model is None:
             raise HTTPException(status_code=503, detail="Model is not loaded.")
 
+        called_at = datetime.now(timezone.utc)
+        payload = customer.model_dump()
         row = pd.DataFrame([customer.model_dump(exclude={"customerID"})])
         # Pipeline.predict_proba runs the registered preprocessing step before XGBoost.
         churn_probability = float(model.predict_proba(row)[0, 1])
         prediction = int(churn_probability >= decision_threshold)
+        log_inference(
+            customer_id=customer.customerID,
+            payload=payload,
+            called_at=called_at,
+            churn_probability=churn_probability,
+            churn_prediction=prediction,
+            decision_threshold=decision_threshold,
+            model_name=app.state.model_name,
+            model_version=app.state.model_version,
+            database_path=database_path,
+        )
         return {
             "customerID": customer.customerID,
             "churn_prediction": prediction,
