@@ -3,6 +3,7 @@
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -12,6 +13,81 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+
+PSI_EPSILON = 1e-6
+
+
+def build_psi_reference(
+    training_features: pd.DataFrame,
+    feature_names: list[str],
+    bin_count: int = 10,
+    epsilon: float = PSI_EPSILON,
+) -> dict[str, Any]:
+    """Create reusable train distributions and bin definitions for PSI scoring.
+
+    Features with few distinct values are treated as categorical; all others use
+    quantile cut points. The returned split points let a later evaluation apply
+    exactly the same bins to test or production data.
+    """
+    if training_features.empty:
+        raise ValueError("Training features must contain at least one row.")
+    if not feature_names:
+        raise ValueError("At least one feature is required to build a PSI reference.")
+    if bin_count < 2:
+        raise ValueError("PSI bin_count must be at least 2.")
+    if not 0 < epsilon < 1:
+        raise ValueError("PSI epsilon must be between 0 and 1.")
+
+    missing_features = set(feature_names).difference(training_features.columns)
+    if missing_features:
+        raise ValueError(
+            f"PSI reference features are missing: {', '.join(sorted(missing_features))}"
+        )
+
+    reference: dict[str, Any] = {
+        "schema_version": 1,
+        "reference_split": "train",
+        "reference_rows": int(len(training_features)),
+        "epsilon": epsilon,
+        "features": {},
+    }
+    feature_references: dict[str, Any] = reference["features"]
+
+    for feature_name in feature_names:
+        values = training_features[feature_name]
+        if values.isna().any():
+            raise ValueError(f"Feature '{feature_name}' contains missing values.")
+
+        unique_values = sorted(values.unique().tolist())
+        if len(unique_values) <= bin_count:
+            proportions = values.value_counts(normalize=True).reindex(
+                unique_values, fill_value=0
+            )
+            feature_references[feature_name] = {
+                "strategy": "categorical",
+                "categories": [float(value) for value in unique_values],
+                "bin_labels": [str(value) for value in unique_values],
+                "reference_proportions": [float(value) for value in proportions],
+            }
+            continue
+
+        quantiles = np.linspace(0, 1, bin_count + 1)[1:-1]
+        split_points = (
+            values.quantile(quantiles).drop_duplicates().sort_values().tolist()
+        )
+        bin_ids = np.searchsorted(split_points, values.to_numpy(), side="left")
+        bin_total = len(split_points) + 1
+        proportions = np.bincount(bin_ids, minlength=bin_total) / len(values)
+        feature_references[feature_name] = {
+            "strategy": "quantile",
+            "split_points": [float(value) for value in split_points],
+            "bin_labels": [
+                f"bin_{index}" for index in range(bin_total)
+            ],
+            "reference_proportions": [float(value) for value in proportions],
+        }
+
+    return reference
 
 
 def calculate_metrics(

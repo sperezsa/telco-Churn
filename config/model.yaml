@@ -10,6 +10,8 @@ training:
   random_state: 42
   decision_threshold: 0.35
   shap_top_k: 5
+  psi_bin_count: 10
+  psi_epsilon: 0.000001
 
 model:
   # This is the sole classifier used by the refactored training pipeline.

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from telco_churn.evaluate import calculate_metrics
+from telco_churn.evaluate import build_psi_reference, calculate_metrics
 from telco_churn.preprocessing import make_preprocessor, split_features_target
 
 
@@ -78,3 +78,40 @@ def test_calculate_metrics_rejects_invalid_threshold() -> None:
     """Reject threshold values that cannot define a probability decision."""
     with pytest.raises(ValueError, match="between 0 and 1"):
         calculate_metrics(np.array([0, 1]), np.array([0.2, 0.8]), threshold=1)
+
+
+def test_build_psi_reference_stores_train_proportions_and_reusable_bins() -> None:
+    """Store distributions and stable bins for categorical and continuous fields."""
+    training = pd.DataFrame(
+        {
+            "Contract": [1, 1, 2, 3, 3],
+            "MonthlyCharges": [10.0, 20.0, 30.0, 40.0, 50.0],
+        }
+    )
+
+    reference = build_psi_reference(
+        training,
+        feature_names=["Contract", "MonthlyCharges"],
+        bin_count=4,
+    )
+
+    assert reference["reference_split"] == "train"
+    assert reference["reference_rows"] == 5
+    contract = reference["features"]["Contract"]
+    assert contract["strategy"] == "categorical"
+    assert contract["categories"] == [1.0, 2.0, 3.0]
+    assert sum(contract["reference_proportions"]) == pytest.approx(1)
+    charges = reference["features"]["MonthlyCharges"]
+    assert charges["strategy"] == "quantile"
+    assert len(charges["split_points"]) == 3
+    assert len(charges["reference_proportions"]) == 4
+    assert sum(charges["reference_proportions"]) == pytest.approx(1)
+
+
+def test_build_psi_reference_rejects_missing_features() -> None:
+    """Fail explicitly if SHAP-selected columns are unavailable."""
+    with pytest.raises(ValueError, match="missing"):
+        build_psi_reference(
+            pd.DataFrame({"tenure": [1, 2]}),
+            feature_names=["Contract"],
+        )

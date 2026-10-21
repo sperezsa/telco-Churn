@@ -180,11 +180,8 @@ usar `uv sync`.
 2. Inicia MLflow en una terminal y déjalo activo durante el entrenamiento:
 
 ```powershell
-uv run mlflow server `
-  --host 127.0.0.1 `
-  --port 5000 `
-  --backend-store-uri sqlite:///mlflow.db `
-  --default-artifact-root ./mlartifacts
+
+
 ```
 
 3. En otra terminal, ejecuta el pipeline de entrenamiento:
@@ -206,6 +203,13 @@ página del experimento/run.
 El ranking de valores SHAP medios absolutos se guarda en
 `models/feature_importance.csv`. Sus primeras cinco features se registran como
 un Feature View en Feast y se materializan en el almacén online SQLite local.
+Además, `explainability/psi_reference.json` queda adjunto al run de MLflow:
+contiene solo estadísticas de `X_train` para esas features (estrategia de
+binning, límites/categorías, proporciones de referencia, tamaño de train y
+epsilon). Los campos numéricos con pocos valores distintos se tratan como
+categóricos; los demás usan bins por cuantiles. El pipeline futuro de evaluación
+debe reutilizar esos límites y categorías para calcular PSI sobre datos nuevos,
+sin volver a ajustar bins sobre el conjunto comparado.
 El fichero se crea en `data/feast/online_store.db` (junto con
 `registry.db` y `shap_features.parquet`). Estos artefactos son locales y están
 ignorados por Git; la configuración de Feast está en

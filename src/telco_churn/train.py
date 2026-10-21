@@ -18,7 +18,7 @@ from xgboost import XGBClassifier
 
 from telco_churn.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config, project_path
 from telco_churn.data_loader import load_data
-from telco_churn.evaluate import evaluate_model
+from telco_churn.evaluate import build_psi_reference, evaluate_model
 from telco_churn.feature_store import store_shap_features
 from telco_churn.preprocessing import make_preprocessor, split_features_target
 
@@ -135,6 +135,12 @@ def train(config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
             transformed_train,
             top_k=int(config["training"]["shap_top_k"]),
         )
+        psi_reference = build_psi_reference(
+            transformed_train,
+            feature_names=importance["feature"].tolist(),
+            bin_count=int(config["training"]["psi_bin_count"]),
+            epsilon=float(config["training"]["psi_epsilon"]),
+        )
         importance_path = PROJECT_ROOT / "models" / "feature_importance.csv"
         importance_path.parent.mkdir(parents=True, exist_ok=True)
         importance.to_csv(importance_path, index=False)
@@ -147,6 +153,8 @@ def train(config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
             json.dumps(stored_features, indent=2),
             artifact_file="explainability/feast_features.json",
         )
+        # Persist train-only bin definitions and proportions for future PSI runs.
+        mlflow.log_dict(psi_reference, "explainability/psi_reference.json")
         logged_model = log_sklearn_model(
             model,
             name="xgboost_pipeline",
