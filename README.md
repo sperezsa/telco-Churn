@@ -1,7 +1,7 @@
 # 📉 Telco Customer Churn Prediction & Retention Optimization
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Pandas](https://img.shields.io/badge/Pandas-3.0%2B-150458?logo=pandas&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.13%2B-3776AB?logo=python&logoColor=white)
+![Pandas](https://img.shields.io/badge/Pandas-2.2%2B-150458?logo=pandas&logoColor=white)
 ![Scikit-Learn](https://img.shields.io/badge/Scikit--Learn-1.3%2B-F7931E?logo=scikit-learn&logoColor=white)
 ![XGBoost](https://img.shields.io/badge/XGBoost-2.0%2B-Red?logo=xgboost&logoColor=white)
 ![SHAP](https://img.shields.io/badge/SHAP-Explainability-4B0082)
@@ -39,31 +39,28 @@ El dataset utilizado contiene **7,043 registros** y **21 variables** con informa
 ## 🛠️ Pipeline de Preprocesamiento y Feature Engineering
 
 1. **Codificación de variables Categóricas:**
-   * **Mapeo Binario:** Asignación $1/0$ a variables dicotómicas (`Partner`, `Dependents`, `PaperlessBilling`, `Churn`).
-   * **Codificación Ordinal:** Mapeo jerárquico para `Contract` (`Month-to-month`: 0, `One year`: 1, `Two year`: 2) respetando la permanencia.
+   * **Mapeo Binario:** Asignación $1/0$ a variables dicotómicas de entrada (`Partner`, `Dependents`, `PhoneService`, `PaperlessBilling`); `Churn` se codifica como objetivo.
+      * **Codificación Ordinal:** Mapeo jerárquico para `Contract` (`Month-to-month`: 1, `One year`: 2, `Two year`: 3) respetando la permanencia.
    * **One-Hot Encoding:** Aplicado con `drop_first=True` a variables nominales (`InternetService`, `PaymentMethod`, etc.) para evitar la trampa de las variables ficticias (*Dummy Variable Trap*).
 2. **Estrategia de Validación:**
    * División **80/20** estratificada (`train_test_split` con `stratify=y`) para preservar exactamente la proporción original del 26.5% de *churn* en ambos conjuntos.
-3. **Escalado de Características:**
-   * Aplicación de `StandardScaler` sobre variables continuas (`tenure`, `MonthlyCharges`, `TotalCharges`) para garantizar la convergencia de modelos lineales.
+3. **Transformaciones integradas:** imputación numérica y One-Hot Encoding se ajustan únicamente con el conjunto de entrenamiento y se empaquetan junto con el modelo para reutilizarlos en inferencia. XGBoost no necesita escalado.
 
 ---
 
-## 🚀 Comparativa de Modelos y Resultados
+## 🚀 Modelo XGBoost seleccionado
 
-Se evaluaron e iteraron diversos algoritmos partiendo de un modelo base (*Baseline*) lineal hasta ensembles basados en árboles con ajuste de pérdida y ajuste de umbral:
+El pipeline productivo se limita a `XGBClassifier`. Para compensar el desbalanceo,
+calcula `scale_pos_weight` como la razón entre las clases negativas y positivas
+del conjunto de entrenamiento (sin usar el conjunto de prueba). El umbral de
+decisión por defecto es `0.35` y se puede ajustar en `config/model.yaml`.
 
-Dada la naturaleza desbalanceada del dataset (~26.5% positivos), la evaluación se prioriza sobre la **curva Precision-Recall (PR-AUC)** en lugar de ROC-AUC, evitando la distorsión producida por la abundancia de Verdaderos Negativos.
-
-| Modelo | Accuracy | Precision (Churn) | **Recall (Churn)** | ROC-AUC | Falsos Negativos (FN) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Logistic Regression (Baseline)** | 0.81 | 0.66 | 0.56 | 0.8421 | 164 |
-| **Random Forest Classifier** | 0.79 | 0.63 | 0.49 | 0.8248 | 190 |
-| **XGBoost (Standard)** | 0.79 | 0.63 | 0.55 | 0.8366 | 170 |
-| **XGBoost (`scale_pos_weight=2.75`)** | 0.76 | 0.53 | **0.75** | 0.8354 | **92** |
-| **XGBoost + Threshold Tuning ($0.35$)** | 0.71 | 0.47 | **0.83** | 0.8390 | **65** |
-
-> **Ganancia de Negocio:** Mediante la combinación del parámetro de ponderación de clase (`scale_pos_weight`) y la optimización del umbral de decisión ($0.35$), se logró reducir las fugas no detectadas de **164 a 65 clientes (reducción del 60.3% en Falsos Negativos)**, elevando el **Recall del 56% al 83%**.
+En la ejecución de referencia con el CSV IBM (partición estratificada 80/20,
+`random_state=42`), el test obtuvo recall **0.8262**, precisión **0.4703**,
+PR-AUC **0.6401** y **65 falsos negativos** con el umbral 0.35. El pipeline
+registra estas y otras métricas tanto de train como de test en MLflow; los
+resultados nuevos se deben consultar allí, no en los experimentos históricos
+del notebook.
 
 ---
 
@@ -71,7 +68,10 @@ Dada la naturaleza desbalanceada del dataset (~26.5% positivos), la evaluación 
 
 Para abrir la "caja negra" de XGBoost y justificar las decisiones predictivas ante el área de negocio, se utilizaron valores **SHAP (SHapley Additive exPlanations)**.
 
-Las características más influyentes a la hora de otorgar probabilidad a variable objetivo Churn (0 o 1) son las siguientes: **Contract, tenure, MonthlyCharges e InternetService_Fiber optic**.
+Las cinco características con mayor media del valor absoluto SHAP en la ejecución
+de referencia fueron **Contract, tenure, MonthlyCharges,
+InternetService_Fiber optic** y **TotalCharges**. El ranking se recalcula al
+entrenar; sus primeras cinco features se registran en Feast.
 
 Conclusiones y plan de acción: 
 
@@ -84,7 +84,11 @@ Conclusiones y plan de acción:
 
 ## 🎯 Optimización de Umbrales y Análisis de Costes de Campaña
 
-El umbral por defecto ($0.50$) es ineficiente en datos desbalanceados. Se evalúan tres enfoques para la toma de decisiones:
+Este apartado resume experimentos del notebook exploratorio; la búsqueda
+financiera de umbrales y sus funciones de coste no forman parte del pipeline
+refactorizado. El entrenamiento actual usa el umbral configurable `0.35`.
+
+En el notebook se evaluaron tres enfoques para la toma de decisiones:
 
 ```text
 +-------------------------------------------------------------------------------+
@@ -132,42 +136,158 @@ Esté método arroja un volumen de `36` Falsos Negativos (Clientes Perdidos) que
 ## 📁 Estructura del Repositorio
 
 ```text
+├── api/                         # API REST de predicción
+├── config/                      # Configuración del modelo y entrenamiento
 ├── data/
-│   └── telco_churn.csv               # Dataset original de Telco Customer Churn
-├── /
-│   └── 01_telco_churn_pipeline.ipynb # Pipeline completo: EDA, ML, SHAP y Costes
-├── README.md                         # Documentación ejecutiva y técnica del proyecto
-└── requirements.txt                  # Dependencias (scikit-learn, xgboost, shap, pandas, matplotlib)
+│   ├── examples/                # CSV de ejemplo para log y CRM
+│   └── monitoring/              # SQLite local (ignorado por Git)
+├── feature_store/               # Configuración local de Feast
+├── models/                      # Artefactos de modelo locales (ignorados por Git)
+├── monitoring/                  # Procesos PSI y evaluación de rendimiento
+├── notebooks/                   # Documentación y notebooks del proyecto
+├── src/telco_churn/
+│   ├── data_loader.py            # Carga y validación de los datos
+│   ├── preprocessing.py         # Preprocesamiento reutilizable
+│   ├── train.py                 # Entrenamiento XGBoost, SHAP y logging MLflow
+│   ├── evaluate.py              # Métricas de entrenamiento y prueba
+│   └── feature_store.py         # Registro y materialización en Feast
+├── tests/
+├── pyproject.toml               # Dependencias y configuración del paquete
+├── requirements.txt             # Exportación reproducible del lock de uv
+└── uv.lock
 ```
 
 ---
 
 ## ⚙️ Requisitos, Instalación y Configuración del Entorno con `uv`
 
-Para replicar los experimentos y ejecutar las funciones de optimización:
+El proyecto requiere Python 3.13 y [uv](https://docs.astral.sh/uv/). `uv sync`
+crea/reutiliza `.venv` y sincroniza las versiones fijadas en `uv.lock`.
 
-Este proyecto utiliza [uv](https://docs.astral.sh/uv/) como gestor rápido de paquetes y entornos virtuales de Python.
+En Windows PowerShell:
 
-### Prerrequisitos
+```powershell
+uv sync
+Invoke-WebRequest `
+  -Uri "https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv" `
+  -OutFile "data/data_churn.csv"
+```
 
-Tener instalado `uv`. Si aún no lo tienes, instálalo con:
+El CSV y los artefactos generados se mantienen localmente y no se versionan.
+`requirements.txt` es una exportación de `uv.lock`; para desarrollo se recomienda
+usar `uv sync`.
 
-- **macOS / Linux:**
-  ```bash
-  curl -LsSf [https://astral.sh/uv/install.sh](https://astral.sh/uv/install.sh) | sh
-  ```
-- **Windows**
-  ```bash
-  powershell -ExecutionPolicy ByPass -c "irm [https://astral.sh/uv/install.ps1](https://astral.sh/uv/install.ps1) | iex"
-  ```
-- Tras ello, ejecutar lo siguiente: 
-  ```bash
-   git clone [https://github.com/sperezsa/telco-Churn.git](https://github.com/sperezsa/telco-Churn.git)
-   cd telco-Churn
-   uv sync
-   ```
-- Si usas VS Code:
-1. Abre el archivo .ipynb en VS Code.
-2. Arriba a la derecha, haz clic en Select Kernel $\rightarrow$ Python Environments.
-3. Selecciona el intérprete de la carpeta `.venv` de tu proyecto.
-4. Ejecuta las celdas directamente.
+### Orden de ejecución local
+
+1. Ejecuta `uv sync` y descarga el CSV siguiendo los comandos anteriores.
+2. Inicia MLflow en una terminal y déjalo activo durante el entrenamiento:
+
+```powershell
+uv run mlflow server `
+  --host 127.0.0.1 `
+  --port 5000 `
+  --backend-store-uri sqlite:///mlflow.db `
+  --default-artifact-root ./mlartifacts
+```
+
+3. En otra terminal, ejecuta el pipeline de entrenamiento:
+
+```powershell
+uv run python -m telco_churn.train
+```
+
+El entrenamiento usa una partición estratificada 80/20; calcula
+`scale_pos_weight` como negativos/positivos únicamente sobre train. Se registran
+en MLflow parámetros y métricas con prefijos `train_` y `test_` (incluyendo
+recall, precisión, F1, ROC-AUC, PR-AUC y matriz de confusión). El umbral de
+decisión y los parámetros están en `config/model.yaml`. El pipeline sklearn
+completo (preprocesamiento + XGBoost) se registra como modelo versionado
+`telco-churn-xgboost`; el alias local `champion` se actualiza a la versión
+recién entrenada. Puede consultarse en la UI de MLflow, en **Models**, o en la
+página del experimento/run.
+
+El ranking de valores SHAP medios absolutos se guarda en
+`models/feature_importance.csv`. Sus primeras cinco features se registran como
+un Feature View en Feast y se materializan en el almacén online SQLite local.
+Además, `explainability/psi_reference.json` queda adjunto al run de MLflow:
+contiene solo estadísticas de `X_train` para esas features (estrategia de
+binning, límites/categorías, proporciones de referencia, tamaño de train y
+epsilon). Los campos numéricos con pocos valores distintos se tratan como
+categóricos; los demás usan bins por cuantiles. El pipeline de evaluación, que se comenta en la sección de monitorización, va a reutilizar esos límites y categorías para calcular PSI sobre datos nuevos,
+sin volver a ajustar bins sobre el conjunto comparado.
+El fichero se crea en `data/feast/online_store.db` (junto con
+`registry.db` y `shap_features.parquet`). Estos artefactos son locales y están
+ignorados por Git; la configuración de Feast está en
+`feature_store/feature_store.yaml`.
+
+### API de predicción
+
+4. Una vez que el entrenamiento termina y crea el modelo, inicia la API en otra
+terminal:
+
+```powershell
+uv run uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+
+La API carga `models:/telco-churn-xgboost@champion` desde MLflow, no una copia
+local del modelo. Ese artefacto es un `sklearn.Pipeline`: al recibir los campos
+crudos, `predict_proba()` ejecuta primero el paso `preprocessor` y después
+XGBoost. La etiqueta de respuesta usa el umbral configurable (`0.35` por
+defecto), mientras que la probabilidad se devuelve sin discretizar.
+
+La documentación interactiva estará disponible en `http://127.0.0.1:8000/docs`.
+El endpoint `POST /predict` recibe las columnas de cliente excepto `Churn` y
+devuelve la predicción binaria, probabilidad y umbral aplicado. `GET /health`
+informa la URI de modelo MLflow cargada.
+
+### Monitorización PSI y rendimiento del modelo
+
+La API registra cada predicción en `data/monitoring/monitoring.db`, tabla
+`log_inferencia`: timestamp UTC, customer_id, payload original, probabilidad,
+clase predicha, umbral y versión concreta del modelo. La tabla `clientes_crm`
+guarda la etiqueta real y el estado del cliente por fecha de instantánea.
+Al inicializar la base se cargan los CSV de ejemplo de `data/examples/` solo si
+la tabla correspondiente está vacía. Sustituye/actualiza la instantánea CRM con
+los datos de negocio antes de ejecutar la evaluación para usar el estado real.
+Para importar una nueva foto de cartera, prepara el CSV con las columnas
+`customer_id,snapshot_date,churn_actual,customer_status` (fechas ISO y estado
+`active`/`churned`) y ejecuta:
+
+```powershell
+uv run python -m monitoring.load_crm --file data/examples/clientes_crm.csv
+```
+
+La importación hace upsert por cliente y fecha, así que conserva snapshots
+históricos y permite reemplazar registros de la misma fecha.
+
+Mantén MLflow activo y ejecuta desde la raíz del repositorio:
+
+```powershell
+uv run python -m monitoring.psi
+uv run python -m monitoring.performance_model
+```
+
+Ambos procesos seleccionan los registros de la **semana natural completa
+anterior (lunes 00:00 UTC a lunes siguiente, fin exclusivo)**. PSI transforma
+los payloads de esa semana con el pipeline correspondiente a la versión que
+generó cada inferencia, reutiliza el baseline `explainability/psi_reference.json`
+de dicha versión y registra una métrica `psi_<feature>` por top feature. Los
+estados se asignan como `OK` para PSI < 0.1, `Warning` para 0.1 ≤ PSI < 0.2 y
+`Alert` para PSI ≥ 0.2. En el experimento MLflow
+`telco-churn-model-monitoring` también queda un CSV de auditoría con timestamp,
+modelo, versión, feature, PSI y estado.
+
+El proceso de evaluación de rendimiento del modelo cruza esas mismas inferencias con la última
+instantánea CRM disponible a la fecha de evaluación. Registra en el mismo
+experimento accuracy, precision, recall, F1, ROC-AUC, PR-AUC y los cuatro
+valores de la matriz de confusión, más un CSV de las filas cruzadas. Así se
+compara la predicción de la semana `t-1` con el estado CRM actual; los datos de
+ejemplo cubren la semana del 12 al 18 de octubre de 2026 y la instantánea del
+21 de octubre de 2026 para demostrar esa ventana temporal.
+
+### Notebook exploratorio
+
+El notebook original `01_telco_churn_pipeline.ipynb` se conserva en la carpeta `notebooks`. La
+implementación ejecutable del modelo seleccionado (XGBoost con
+`scale_pos_weight`) está en `src/telco_churn/`; los experimentos con los otros
+modelos del notebook fueron ensayos para evaluar otros modelos, y no forman parte del pipeline de entrenamiento.

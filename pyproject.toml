@@ -1,21 +1,29 @@
 [project]
 name = "telco-churn"
 version = "0.1.0"
-description = "Add your description here"
+description = "Telco customer churn prediction with XGBoost, SHAP, Feast and MLflow"
 readme = "README.md"
-authors = [
-    { name = "Serchs", email = "sperezsa3@gmail.com" }
-]
+authors = [{ name = "Serchs", email = "sperezsa3@gmail.com" }]
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.115.0",
+    "feast>=0.57.0",
     "ipykernel>=7.4.0",
+    "joblib>=1.4.0",
     "matplotlib>=3.11.2",
-    "pandas>=3.0.6",
+    "mlflow>=3.0.0",
+    "pandas>=2.2.0,<3",
+    "pyarrow>=19.0.0",
+    "pyyaml>=6.0.0",
     "scikit-learn>=1.9.1",
     "seaborn>=0.13.2",
     "shap>=0.52.0",
+    "uvicorn>=0.34.0",
     "xgboost>=3.4.1",
 ]
+
+[dependency-groups]
+dev = ["pytest>=8.0.0"]
 
 [build-system]
 requires = ["uv_build>=0.12.21,<0.13.0"]

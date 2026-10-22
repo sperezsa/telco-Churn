@@ -1,0 +1,33 @@
+# Keep file paths repository-relative so commands are independent of cwd.
+data:
+  path: data/data_churn.csv
+  target: Churn
+  customer_id: customerID
+
+# Threshold below 0.5 targets higher churn recall at the cost of precision.
+training:
+  test_size: 0.2
+  random_state: 42
+  decision_threshold: 0.35
+  shap_top_k: 5
+  psi_bin_count: 10
+  psi_epsilon: 0.000001
+
+model:
+  # This is the sole classifier used by the refactored training pipeline.
+  n_estimators: 100
+  learning_rate: 0.1
+  max_depth: 6
+
+mlflow:
+  tracking_uri: http://127.0.0.1:5000
+  experiment_name: telco-churn-xgboost
+  registered_model_name: telco-churn-xgboost
+  model_alias: champion
+
+monitoring:
+  experiment_name: telco-churn-model-monitoring
+  database_path: data/monitoring/monitoring.db
+  psi:
+    ok_below: 0.1
+    warning_below: 0.2

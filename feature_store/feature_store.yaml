@@ -1,0 +1,8 @@
+# Local Feast setup intended for development; production should use managed stores.
+project: telco_churn
+provider: local
+# Generated registry and online data stay under the ignored data/ directory.
+registry: ../data/feast/registry.db
+online_store:
+  type: sqlite
+  path: ../data/feast/online_store.db

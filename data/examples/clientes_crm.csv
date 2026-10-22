@@ -1,0 +1,9 @@
+customer_id,snapshot_date,churn_actual,customer_status
+SAMPLE-001,2026-10-21,1,churned
+SAMPLE-002,2026-10-21,0,active
+SAMPLE-003,2026-10-21,0,active
+SAMPLE-004,2026-10-21,1,churned
+SAMPLE-005,2026-10-21,1,churned
+SAMPLE-006,2026-10-21,1,churned
+SAMPLE-007,2026-10-21,0,active
+SAMPLE-008,2026-10-21,0,active
