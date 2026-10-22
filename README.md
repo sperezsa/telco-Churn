@@ -183,8 +183,11 @@ usar `uv sync`.
 2. Inicia MLflow en una terminal y déjalo activo durante el entrenamiento:
 
 ```powershell
-
-
+uv run mlflow server `
+  --host 127.0.0.1 `
+  --port 5000 `
+  --backend-store-uri sqlite:///mlflow.db `
+  --default-artifact-root ./mlartifacts
 ```
 
 3. En otra terminal, ejecuta el pipeline de entrenamiento:
@@ -210,8 +213,7 @@ Además, `explainability/psi_reference.json` queda adjunto al run de MLflow:
 contiene solo estadísticas de `X_train` para esas features (estrategia de
 binning, límites/categorías, proporciones de referencia, tamaño de train y
 epsilon). Los campos numéricos con pocos valores distintos se tratan como
-categóricos; los demás usan bins por cuantiles. El pipeline futuro de evaluación
-debe reutilizar esos límites y categorías para calcular PSI sobre datos nuevos,
+categóricos; los demás usan bins por cuantiles. El pipeline de evaluación, que se comenta en la sección de monitorización, va a reutilizar esos límites y categorías para calcular PSI sobre datos nuevos,
 sin volver a ajustar bins sobre el conjunto comparado.
 El fichero se crea en `data/feast/online_store.db` (junto con
 `registry.db` y `shap_features.parquet`). Estos artefactos son locales y están
@@ -241,7 +243,7 @@ informa la URI de modelo MLflow cargada.
 ### Monitorización PSI y rendimiento del modelo
 
 La API registra cada predicción en `data/monitoring/monitoring.db`, tabla
-`log_inferencia`: timestamp UTC, `customer_id`, payload original, probabilidad,
+`log_inferencia`: timestamp UTC, customer_id, payload original, probabilidad,
 clase predicha, umbral y versión concreta del modelo. La tabla `clientes_crm`
 guarda la etiqueta real y el estado del cliente por fecha de instantánea.
 Al inicializar la base se cargan los CSV de ejemplo de `data/examples/` solo si
@@ -275,7 +277,7 @@ estados se asignan como `OK` para PSI < 0.1, `Warning` para 0.1 ≤ PSI < 0.2 y
 `telco-churn-model-monitoring` también queda un CSV de auditoría con timestamp,
 modelo, versión, feature, PSI y estado.
 
-El proceso de rendimiento cruza esas mismas inferencias con la última
+El proceso de evaluación de rendimiento del modelo cruza esas mismas inferencias con la última
 instantánea CRM disponible a la fecha de evaluación. Registra en el mismo
 experimento accuracy, precision, recall, F1, ROC-AUC, PR-AUC y los cuatro
 valores de la matriz de confusión, más un CSV de las filas cruzadas. Así se
@@ -285,7 +287,7 @@ ejemplo cubren la semana del 12 al 18 de octubre de 2026 y la instantánea del
 
 ### Notebook exploratorio
 
-El notebook original `01_telco_churn_pipeline.ipynb` se conserva en la raíz. La
+El notebook original `01_telco_churn_pipeline.ipynb` se conserva en la carpeta `notebooks`. La
 implementación ejecutable del modelo seleccionado (XGBoost con
 `scale_pos_weight`) está en `src/telco_churn/`; los experimentos con los otros
-modelos del notebook no forman parte del pipeline de entrenamiento.
+modelos del notebook fueron ensayos para evaluar otros modelos, y no forman parte del pipeline de entrenamiento.
