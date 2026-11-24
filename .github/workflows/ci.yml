@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: telco_churn
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: telco_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U telco_churn -d telco_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://telco_churn:test-password@localhost:5432/telco_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen
+      - run: uv run pytest
+      - run: docker build --tag telco-churn:ci .
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, windows]
+    environment: laptop
+    concurrency:
+      group: laptop-deployment
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start infrastructure, train and deploy
+        shell: pwsh
+        env:
+          COMPOSE_ENV_FILE: ${{ secrets.COMPOSE_ENV_FILE }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:COMPOSE_ENV_FILE)) {
+            throw "Configure the COMPOSE_ENV_FILE secret in the laptop environment."
+          }
+          [System.IO.File]::WriteAllText(
+            (Join-Path $PWD ".env"),
+            $env:COMPOSE_ENV_FILE,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          try {
+            docker compose up --detach --build postgres mlflow
+            if ($LASTEXITCODE -ne 0) { throw "Could not start PostgreSQL and MLflow." }
+
+            docker compose --profile jobs run --rm trainer python -m telco_churn.download_data
+            if ($LASTEXITCODE -ne 0) { throw "Dataset download failed." }
+
+            docker compose --profile jobs run --rm trainer python -m telco_churn.train
+            if ($LASTEXITCODE -ne 0) { throw "Model training failed." }
+
+            docker compose up --detach --build api
+            if ($LASTEXITCODE -ne 0) { throw "API deployment failed." }
+
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              try {
+                $response = Invoke-RestMethod http://localhost:8000/health -TimeoutSec 5
+                if ($response.status -eq "ok") {
+                  $ready = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Seconds 5
+              }
+            }
+            if (-not $ready) { throw "API did not become healthy at http://localhost:8000/health." }
+          } finally {
+            Remove-Item -LiteralPath (Join-Path $PWD ".env") -Force -ErrorAction SilentlyContinue
+          }

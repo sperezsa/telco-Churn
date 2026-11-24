@@ -147,11 +147,14 @@ Esté método arroja un volumen de `36` Falsos Negativos (Clientes Perdidos) que
 ├── notebooks/                   # Documentación y notebooks del proyecto
 ├── src/telco_churn/
 │   ├── data_loader.py            # Carga y validación de los datos
+│   ├── download_data.py          # Descarga el CSV desde una URL configurable
 │   ├── preprocessing.py         # Preprocesamiento reutilizable
 │   ├── train.py                 # Entrenamiento XGBoost, SHAP y logging MLflow
 │   ├── evaluate.py              # Métricas de entrenamiento y prueba
 │   └── feature_store.py         # Registro y materialización en Feast
 ├── tests/
+├── Dockerfile                    # Imagen de API y tareas batch
+├── docker-compose.yml            # API, MLflow, PostgreSQL y jobs
 ├── pyproject.toml               # Dependencias y configuración del paquete
 ├── requirements.txt             # Exportación reproducible del lock de uv
 └── uv.lock
@@ -168,9 +171,7 @@ En Windows PowerShell:
 
 ```powershell
 uv sync
-Invoke-WebRequest `
-  -Uri "https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv" `
-  -OutFile "data/data_churn.csv"
+uv run python -m telco_churn.download_data
 ```
 
 El CSV y los artefactos generados se mantienen localmente y no se versionan.
@@ -242,13 +243,15 @@ informa la URI de modelo MLflow cargada.
 
 ### Monitorización PSI y rendimiento del modelo
 
-La API registra cada predicción en `data/monitoring/monitoring.db`, tabla
-`log_inferencia`: timestamp UTC, customer_id, payload original, probabilidad,
-clase predicha, umbral y versión concreta del modelo. La tabla `clientes_crm`
-guarda la etiqueta real y el estado del cliente por fecha de instantánea.
-Al inicializar la base se cargan los CSV de ejemplo de `data/examples/` solo si
-la tabla correspondiente está vacía. Sustituye/actualiza la instantánea CRM con
-los datos de negocio antes de ejecutar la evaluación para usar el estado real.
+La API registra cada predicción en `log_inferencia`: timestamp UTC,
+customer_id, payload original, probabilidad, clase predicha, umbral y versión
+concreta del modelo. La tabla `clientes_crm` guarda la etiqueta real y el
+estado del cliente por fecha de instantánea. El flujo local usa SQLite;
+Docker Compose usa PostgreSQL en la base `telco_monitoring`.
+En SQLite local los CSV de ejemplo de `data/examples/` se cargan solo si la
+tabla correspondiente está vacía; PostgreSQL no inserta fixtures
+automáticamente. Importa las inferencias y la instantánea CRM reales antes de
+ejecutar la evaluación.
 Para importar una nueva foto de cartera, prepara el CSV con las columnas
 `customer_id,snapshot_date,churn_actual,customer_status` (fechas ISO y estado
 `active`/`churned`) y ejecuta:
@@ -284,6 +287,92 @@ valores de la matriz de confusión, más un CSV de las filas cruzadas. Así se
 compara la predicción de la semana `t-1` con el estado CRM actual; los datos de
 ejemplo cubren la semana del 12 al 18 de octubre de 2026 y la instantánea del
 21 de octubre de 2026 para demostrar esa ventana temporal.
+
+### Ejecución con Docker Compose
+
+Docker Compose permite ejecutar la API, MLflow y PostgreSQL en local. La
+instancia PostgreSQL contiene dos bases separadas: `mlflow` para el tracking y
+el registro de modelos, y `telco_monitoring` para las inferencias y las
+instantáneas CRM. Los procesos de entrenamiento y monitorización se ejecutan
+como tareas puntuales, no como servidores permanentes.
+
+1. Instala Docker Desktop y prepara las variables locales:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Existe un `.env.example`, para que se utilice como guía para generar un `.env`. 
+Será necesario actualizar `POSTGRES_PASSWORD` y las contraseñas de las URI
+`MLFLOW_BACKEND_STORE_URI` y `MONITORING_DATABASE_URL` con el mismo valor
+codificado para URL si contiene caracteres especiales. 
+
+2. Arranca PostgreSQL y MLflow:
+
+```powershell
+docker compose up -d postgres mlflow
+```
+
+El volumen `postgres_data` conserva ambas bases de datos y el volumen
+`mlflow_artifacts` conserva los artefactos de ejecuciones y modelos aunque los
+contenedores se recreen. PostgreSQL publica el puerto `5432` solo en el
+loopback del host (`127.0.0.1`), igual que la API (`8000`) y MLflow (`5000`);
+por tanto, estos servicios no son accesibles desde otros equipos de la red.
+
+3. Descarga el CSV en el volumen local `data/` y entrena/registra el primer
+modelo:
+
+```powershell
+docker compose --profile jobs run --rm trainer python -m telco_churn.download_data
+docker compose --profile jobs run --rm trainer python -m telco_churn.train
+```
+
+El descargador usa `DATASET_URL` de `.env`; por defecto apunta al CSV público
+utilizado por el flujo local. El archivo se guarda en `data/data_churn.csv`
+en local, fuera de la imagen y del repositorio. También se puede elegir el destino 
+con `--output` o la URL con `--url`.
+
+4. Inicia la API:
+
+```powershell
+docker compose up -d --build api
+```
+
+Comprueba `http://localhost:8000/health`, abre la documentación de la API en
+`http://localhost:8000/docs` y la UI de MLflow en `http://localhost:5000`.
+Para ejecutar tareas de monitorización manualmente:
+
+```powershell
+docker compose --profile jobs run --rm monitoring python -m monitoring.psi
+docker compose --profile jobs run --rm monitoring python -m monitoring.performance_model
+docker compose --profile jobs run --rm monitoring python -m monitoring.load_crm --file data/examples/clientes_crm.csv
+```
+
+`docker compose down` detiene los servicios sin borrar los volúmenes.
+`docker compose down --volumes` elimina también las bases de datos y los
+artefactos persistidos.
+
+### GitHub Actions y despliegue en el portátil
+
+El workflow `.github/workflows/ci.yml` instala las dependencias desde
+`uv.lock`, ejecuta las pruebas unitarias y de integración PostgreSQL y construye
+la imagen en cada pull request y en pushes a `main`/`develop`. Tras un push a
+`main` solo, el job de despliegue se ejecuta en un runner self-hosted Windows
+del portátil. Para habilitarlo:
+
+1. Registra un runner self-hosted de Windows para el repositorio y mantenlo
+   conectado con Docker Desktop en ejecución.
+2. Crea el environment `laptop` en GitHub y añade el secret
+   `COMPOSE_ENV_FILE` con el contenido completo del `.env` local (por ejemplo,
+   las líneas de `.env.example` después de reemplazar la contraseña).
+3. Integra los cambios en `main`. El job de despliegue levanta PostgreSQL y
+   MLflow, descarga los datos, vuelve a entrenar y registra el modelo, actualiza
+   la API y verifica `/health`.
+
+El runner ejecuta Compose localmente, por lo que la API y MLflow quedan
+disponibles en el portátil y no se exponen credenciales a un runner alojado por
+GitHub. Los workflows no programan automáticamente la monitorización semanal;
+sus comandos se pueden programar posteriormente en el sistema operativo.
 
 ### Notebook exploratorio
 

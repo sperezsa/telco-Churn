@@ -48,6 +48,28 @@ def split_features_target(
     return features, target.astype("int8"), customer_ids
 
 
+def align_features_to_schema(
+    features: pd.DataFrame, expected_columns: list[str]
+) -> pd.DataFrame:
+    """Validate feature names and order a frame to match the fitted model schema."""
+    expected = set(expected_columns)
+    actual = set(features.columns)
+    missing = expected - actual
+    unexpected = actual - expected
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append(f"missing columns: {', '.join(sorted(missing))}")
+        if unexpected:
+            details.append(f"unexpected columns: {', '.join(sorted(unexpected))}")
+        raise ValueError(
+            "Inference payload does not match the model input schema ("
+            + "; ".join(details)
+            + ")."
+        )
+    return features.loc[:, expected_columns]
+
+
 def make_preprocessor(features: pd.DataFrame) -> Pipeline:
     """Build an imputation and encoding pipeline fitted only on training data."""
     business_numeric = [column for column in [*_BINARY_COLUMNS, "Contract"] if column in features]

@@ -1,69 +1,156 @@
-"""SQLite persistence for inference logs and CRM snapshots used in monitoring."""
+"""Persistence for inference logs and CRM snapshots used in monitoring."""
 
 import csv
+from functools import lru_cache
 import json
-import sqlite3
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
-from telco_churn.config import PROJECT_ROOT
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Float,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    create_engine,
+    func,
+    insert,
+    select,
+)
+from sqlalchemy.engine import Connection, Engine, URL
+
+from telco_churn.config import PROJECT_ROOT, project_path
 
 
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "monitoring" / "monitoring.db"
 EXAMPLE_DATA_PATH = PROJECT_ROOT / "data" / "examples"
 INFERENCE_LOG_EXAMPLE = EXAMPLE_DATA_PATH / "log_inferencia.csv"
 CRM_EXAMPLE = EXAMPLE_DATA_PATH / "clientes_crm.csv"
+CRM_INSERT_BATCH_SIZE = 500
+DatabaseTarget: TypeAlias = Path | str
+
+metadata = MetaData()
+inference_logs = Table(
+    "log_inferencia",
+    metadata,
+    Column("inference_id", Integer, primary_key=True, autoincrement=True),
+    Column("customer_id", String, nullable=False),
+    Column("called_at", Text, nullable=False),
+    Column("payload_json", Text, nullable=False),
+    Column(
+        "churn_probability",
+        Float,
+        CheckConstraint("churn_probability >= 0 AND churn_probability <= 1"),
+        nullable=False,
+    ),
+    Column(
+        "churn_prediction",
+        Integer,
+        CheckConstraint("churn_prediction IN (0, 1)"),
+        nullable=False,
+    ),
+    Column(
+        "decision_threshold",
+        Float,
+        CheckConstraint("decision_threshold > 0 AND decision_threshold < 1"),
+        nullable=False,
+    ),
+    Column("model_name", String, nullable=False),
+    Column("model_version", String, nullable=False),
+)
+Index("idx_log_inferencia_called_at", inference_logs.c.called_at)
+crm_customers = Table(
+    "clientes_crm",
+    metadata,
+    Column("customer_id", String, primary_key=True),
+    Column("snapshot_date", String, primary_key=True),
+    Column(
+        "churn_actual",
+        Integer,
+        CheckConstraint("churn_actual IN (0, 1)"),
+        nullable=False,
+    ),
+    Column("customer_status", String, nullable=False),
+)
+
+
+def monitoring_database_target(configured_path: str | Path) -> DatabaseTarget:
+    """Resolve the monitoring URL from the environment or project configuration."""
+    database_url = os.getenv("MONITORING_DATABASE_URL")
+    if database_url:
+        return database_url
+    configured_value = str(configured_path)
+    if "://" in configured_value:
+        return configured_value
+    return project_path(configured_path)
+
+
+@lru_cache(maxsize=8)
+def _postgres_engine(database_url: str) -> Engine:
+    return create_engine(database_url, pool_pre_ping=True)
+
+
+def _create_engine(database_target: DatabaseTarget) -> Engine:
+    if isinstance(database_target, Path):
+        database_target.parent.mkdir(parents=True, exist_ok=True)
+        url = URL.create(
+            "sqlite+pysqlite", database=str(database_target.resolve())
+        )
+    elif "://" in database_target:
+        url = database_target
+    else:
+        path = Path(database_target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        url = URL.create("sqlite+pysqlite", database=str(path.resolve()))
+    if isinstance(url, str) and url.startswith("postgresql"):
+        return _postgres_engine(url)
+    return create_engine(
+        url,
+        connect_args={"check_same_thread": False}
+        if isinstance(url, URL) and url.get_backend_name() == "sqlite"
+        else {},
+    )
+
+
+def _dispose_engine(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        engine.dispose()
+
+
+def _insert_ignoring_conflicts(
+    connection: Connection,
+    table: Table,
+    values: dict[str, Any],
+) -> None:
+    if connection.dialect.name == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
+    elif connection.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as dialect_insert
+    else:
+        connection.execute(insert(table).values(**values))
+        return
+    statement = dialect_insert(table).values(**values).on_conflict_do_nothing()
+    connection.execute(statement)
 
 
 def initialize_monitoring_store(
-    database_path: Path = DEFAULT_DATABASE_PATH,
-    seed_examples: bool = True,
+    database_path: DatabaseTarget = DEFAULT_DATABASE_PATH,
+    seed_examples: bool | None = None,
     sample_model_name: str = "telco-churn-xgboost",
     sample_model_version: str = "1",
 ) -> None:
-    """Create local monitoring tables and seed each empty table from CSV examples."""
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS log_inferencia (
-                inference_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                customer_id TEXT NOT NULL,
-                called_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                churn_probability REAL NOT NULL CHECK (
-                    churn_probability >= 0 AND churn_probability <= 1
-                ),
-                churn_prediction INTEGER NOT NULL CHECK (
-                    churn_prediction IN (0, 1)
-                ),
-                decision_threshold REAL NOT NULL CHECK (
-                    decision_threshold > 0 AND decision_threshold < 1
-                ),
-                model_name TEXT NOT NULL,
-                model_version TEXT NOT NULL
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_log_inferencia_called_at
-            ON log_inferencia (called_at)
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS clientes_crm (
-                customer_id TEXT NOT NULL,
-                snapshot_date TEXT NOT NULL,
-                churn_actual INTEGER NOT NULL CHECK (churn_actual IN (0, 1)),
-                customer_status TEXT NOT NULL,
-                PRIMARY KEY (customer_id, snapshot_date)
-            )
-            """
-        )
-
+    """Create monitoring tables and seed local SQLite tables with examples."""
+    if seed_examples is None:
+        seed_examples = isinstance(database_path, Path)
+    engine = _create_engine(database_path)
+    metadata.create_all(engine)
+    with engine.begin() as connection:
         if seed_examples:
             _seed_inference_examples(
                 connection,
@@ -71,6 +158,7 @@ def initialize_monitoring_store(
                 sample_model_version=sample_model_version,
             )
             _seed_crm_examples(connection)
+    _dispose_engine(engine)
 
 
 def log_inference(
@@ -82,55 +170,50 @@ def log_inference(
     decision_threshold: float,
     model_name: str,
     model_version: str,
-    database_path: Path = DEFAULT_DATABASE_PATH,
+    database_path: DatabaseTarget = DEFAULT_DATABASE_PATH,
 ) -> None:
     """Persist the request and output values for a completed API prediction."""
     initialize_monitoring_store(database_path, seed_examples=False)
-    with sqlite3.connect(database_path) as connection:
+    engine = _create_engine(database_path)
+    with engine.begin() as connection:
         connection.execute(
-            """
-            INSERT INTO log_inferencia (
-                customer_id, called_at, payload_json, churn_probability,
-                churn_prediction, decision_threshold, model_name, model_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                customer_id,
-                called_at.astimezone(timezone.utc).isoformat(timespec="seconds"),
-                json.dumps(payload, ensure_ascii=False, sort_keys=True),
-                churn_probability,
-                churn_prediction,
-                decision_threshold,
-                model_name,
-                str(model_version),
-            ),
+            insert(inference_logs).values(
+                customer_id=customer_id,
+                called_at=called_at.astimezone(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+                payload_json=json.dumps(payload, ensure_ascii=False),
+                churn_probability=churn_probability,
+                churn_prediction=churn_prediction,
+                decision_threshold=decision_threshold,
+                model_name=model_name,
+                model_version=str(model_version),
+            )
         )
+    _dispose_engine(engine)
 
 
 def load_inference_logs(
     start_at: datetime,
     end_at: datetime,
-    database_path: Path = DEFAULT_DATABASE_PATH,
+    database_path: DatabaseTarget = DEFAULT_DATABASE_PATH,
 ) -> list[dict[str, Any]]:
     """Return inference records in the half-open UTC interval [start_at, end_at)."""
-    if not database_path.is_file():
-        raise FileNotFoundError(f"Monitoring database not found: {database_path}")
+    _ensure_database_exists(database_path)
 
     start_text = start_at.astimezone(timezone.utc).isoformat(timespec="seconds")
     end_text = end_at.astimezone(timezone.utc).isoformat(timespec="seconds")
-    with sqlite3.connect(database_path) as connection:
-        connection.row_factory = sqlite3.Row
+    engine = _create_engine(database_path)
+    with engine.connect() as connection:
         rows = connection.execute(
-            """
-            SELECT inference_id, customer_id, called_at, payload_json,
-                   churn_probability, churn_prediction, decision_threshold,
-                   model_name, model_version
-            FROM log_inferencia
-            WHERE called_at >= ? AND called_at < ?
-            ORDER BY called_at, inference_id
-            """,
-            (start_text, end_text),
-        ).fetchall()
+            select(inference_logs)
+            .where(
+                inference_logs.c.called_at >= start_text,
+                inference_logs.c.called_at < end_text,
+            )
+            .order_by(inference_logs.c.called_at, inference_logs.c.inference_id)
+        ).mappings().all()
+    _dispose_engine(engine)
 
     records = [dict(row) for row in rows]
     for record in records:
@@ -140,41 +223,33 @@ def load_inference_logs(
 
 def load_current_crm_snapshot(
     as_of: date,
-    database_path: Path = DEFAULT_DATABASE_PATH,
+    database_path: DatabaseTarget = DEFAULT_DATABASE_PATH,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Return all CRM rows from the latest complete snapshot on or before a date."""
-    if not database_path.is_file():
-        raise FileNotFoundError(f"Monitoring database not found: {database_path}")
+    _ensure_database_exists(database_path)
 
-    with sqlite3.connect(database_path) as connection:
-        connection.row_factory = sqlite3.Row
+    engine = _create_engine(database_path)
+    with engine.connect() as connection:
         latest = connection.execute(
-            """
-            SELECT MAX(snapshot_date) AS snapshot_date
-            FROM clientes_crm
-            WHERE snapshot_date <= ?
-            """,
-            (as_of.isoformat(),),
-        ).fetchone()["snapshot_date"]
+            select(func.max(crm_customers.c.snapshot_date).label("snapshot_date"))
+            .where(crm_customers.c.snapshot_date <= as_of.isoformat())
+        ).mappings().one()["snapshot_date"]
         if latest is None:
             raise ValueError(f"No CRM snapshot exists on or before {as_of.isoformat()}.")
 
         rows = connection.execute(
-            """
-            SELECT customer_id, snapshot_date, churn_actual, customer_status
-            FROM clientes_crm
-            WHERE snapshot_date = ?
-            ORDER BY customer_id
-            """,
-            (latest,),
-        ).fetchall()
+            select(crm_customers)
+            .where(crm_customers.c.snapshot_date == latest)
+            .order_by(crm_customers.c.customer_id)
+        ).mappings().all()
 
+    _dispose_engine(engine)
     return latest, [dict(row) for row in rows]
 
 
 def import_crm_snapshot(
     csv_path: Path,
-    database_path: Path = DEFAULT_DATABASE_PATH,
+    database_path: DatabaseTarget = DEFAULT_DATABASE_PATH,
 ) -> int:
     """Insert or update CRM records from one dated CSV snapshot."""
     initialize_monitoring_store(database_path, seed_examples=False)
@@ -215,77 +290,103 @@ def import_crm_snapshot(
         if not rows:
             raise ValueError("CRM snapshot CSV contains no customer rows.")
 
-    with sqlite3.connect(database_path) as connection:
-        connection.executemany(
-            """
-            INSERT OR REPLACE INTO clientes_crm (
-                customer_id, snapshot_date, churn_actual, customer_status
-            ) VALUES (?, ?, ?, ?)
-            """,
-            rows,
-        )
+    engine = _create_engine(database_path)
+    with engine.begin() as connection:
+        values = [
+            {
+                "customer_id": customer_id,
+                "snapshot_date": snapshot_date,
+                "churn_actual": churn_actual,
+                "customer_status": customer_status,
+            }
+            for customer_id, snapshot_date, churn_actual, customer_status in rows
+        ]
+        for start in range(0, len(values), CRM_INSERT_BATCH_SIZE):
+            batch = values[start : start + CRM_INSERT_BATCH_SIZE]
+            if connection.dialect.name == "sqlite":
+                from sqlalchemy.dialects.sqlite import insert as dialect_insert
+            elif connection.dialect.name == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert as dialect_insert
+            else:
+                connection.execute(
+                    insert(crm_customers).values(batch).prefix_with("OR REPLACE")
+                )
+                continue
+            statement = dialect_insert(crm_customers).values(batch)
+            connection.execute(
+                statement.on_conflict_do_update(
+                    index_elements=["customer_id", "snapshot_date"],
+                    set_={
+                        "churn_actual": statement.excluded.churn_actual,
+                        "customer_status": statement.excluded.customer_status,
+                    },
+                )
+            )
         imported = len(rows)
+    _dispose_engine(engine)
     return imported
 
 
+def _ensure_database_exists(database_path: DatabaseTarget) -> None:
+    """Keep local SQLite failures explicit while allowing remote database URLs."""
+    if isinstance(database_path, Path):
+        if not database_path.is_file():
+            raise FileNotFoundError(f"Monitoring database not found: {database_path}")
+    elif "://" not in database_path and not Path(database_path).is_file():
+        raise FileNotFoundError(f"Monitoring database not found: {database_path}")
+
+
 def _seed_inference_examples(
-    connection: sqlite3.Connection,
+    connection: Connection,
     sample_model_name: str,
     sample_model_version: str,
 ) -> None:
     """Load dated example predictions once, without overwriting real API logs."""
     current_count = connection.execute(
-        "SELECT COUNT(*) FROM log_inferencia"
-    ).fetchone()[0]
+        select(func.count()).select_from(inference_logs)
+    ).scalar_one()
     if current_count or not INFERENCE_LOG_EXAMPLE.is_file():
         return
 
     with INFERENCE_LOG_EXAMPLE.open(encoding="utf-8", newline="") as example_file:
         for row in csv.DictReader(example_file):
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO log_inferencia (
-                    customer_id, called_at, payload_json, churn_probability,
-                    churn_prediction, decision_threshold, model_name, model_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    row["customer_id"],
-                    row["called_at"],
-                    row["payload_json"],
-                    float(row["churn_probability"]),
-                    int(row["churn_prediction"]),
-                    float(row["decision_threshold"]),
-                    sample_model_name
+            _insert_ignoring_conflicts(
+                connection,
+                inference_logs,
+                {
+                    "customer_id": row["customer_id"],
+                    "called_at": row["called_at"],
+                    "payload_json": row["payload_json"],
+                    "churn_probability": float(row["churn_probability"]),
+                    "churn_prediction": int(row["churn_prediction"]),
+                    "decision_threshold": float(row["decision_threshold"]),
+                    "model_name": sample_model_name
                     if row["model_name"] == "@configured"
                     else row["model_name"],
-                    sample_model_version
+                    "model_version": sample_model_version
                     if row["model_version"] == "@configured"
                     else row["model_version"],
-                ),
+                },
             )
 
 
-def _seed_crm_examples(connection: sqlite3.Connection) -> None:
+def _seed_crm_examples(connection: Connection) -> None:
     """Load one current CRM example snapshot if no CRM records exist yet."""
     current_count = connection.execute(
-        "SELECT COUNT(*) FROM clientes_crm"
-    ).fetchone()[0]
+        select(func.count()).select_from(crm_customers)
+    ).scalar_one()
     if current_count or not CRM_EXAMPLE.is_file():
         return
 
     with CRM_EXAMPLE.open(encoding="utf-8", newline="") as example_file:
         for row in csv.DictReader(example_file):
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO clientes_crm (
-                    customer_id, snapshot_date, churn_actual, customer_status
-                ) VALUES (?, ?, ?, ?)
-                """,
-                (
-                    row["customer_id"],
-                    row["snapshot_date"],
-                    int(row["churn_actual"]),
-                    row["customer_status"],
-                ),
+            _insert_ignoring_conflicts(
+                connection,
+                crm_customers,
+                {
+                    "customer_id": row["customer_id"],
+                    "snapshot_date": row["snapshot_date"],
+                    "churn_actual": int(row["churn_actual"]),
+                    "customer_status": row["customer_status"],
+                },
             )
