@@ -290,7 +290,7 @@ ejemplo cubren la semana del 12 al 18 de octubre de 2026 y la instantánea del
 
 ### Ejecución con Docker Compose
 
-Docker Compose permite ejecutar la API, MLflow y PostgreSQL en el portátil. La
+Docker Compose permite ejecutar la API, MLflow y PostgreSQL en local. La
 instancia PostgreSQL contiene dos bases separadas: `mlflow` para el tracking y
 el registro de modelos, y `telco_monitoring` para las inferencias y las
 instantáneas CRM. Los procesos de entrenamiento y monitorización se ejecutan
@@ -302,10 +302,10 @@ como tareas puntuales, no como servidores permanentes.
 Copy-Item .env.example .env
 ```
 
-Edita `.env`, cambia `POSTGRES_PASSWORD` y actualiza las contraseñas de las URI
+Existe un `.env.example`, para que se utilice como guía para generar un `.env`. 
+Será necesario actualizar `POSTGRES_PASSWORD` y las contraseñas de las URI
 `MLFLOW_BACKEND_STORE_URI` y `MONITORING_DATABASE_URL` con el mismo valor
-codificado para URL si contiene caracteres especiales. No subas `.env` al
-repositorio.
+codificado para URL si contiene caracteres especiales. 
 
 2. Arranca PostgreSQL y MLflow:
 
@@ -315,10 +315,11 @@ docker compose up -d postgres mlflow
 
 El volumen `postgres_data` conserva ambas bases de datos y el volumen
 `mlflow_artifacts` conserva los artefactos de ejecuciones y modelos aunque los
-contenedores se recreen. La base PostgreSQL no publica un puerto en el host;
-API y MLflow solo se publican en `localhost`.
+contenedores se recreen. PostgreSQL publica el puerto `5432` solo en el
+loopback del host (`127.0.0.1`), igual que la API (`8000`) y MLflow (`5000`);
+por tanto, estos servicios no son accesibles desde otros equipos de la red.
 
-3. Descarga el CSV en el volumen local `data/` y entrena/registrar el primer
+3. Descarga el CSV en el volumen local `data/` y entrena/registra el primer
 modelo:
 
 ```powershell
@@ -327,10 +328,9 @@ docker compose --profile jobs run --rm trainer python -m telco_churn.train
 ```
 
 El descargador usa `DATASET_URL` de `.env`; por defecto apunta al CSV público
-utilizado por el flujo local. Se puede reemplazar por cualquier URL directa
-accesible desde el contenedor. El archivo se guarda en `data/data_churn.csv`,
-fuera de la imagen y del repositorio. También se puede elegir el destino con
-`--output` o la URL con `--url`.
+utilizado por el flujo local. El archivo se guarda en `data/data_churn.csv`
+en local, fuera de la imagen y del repositorio. También se puede elegir el destino 
+con `--output` o la URL con `--url`.
 
 4. Inicia la API:
 
