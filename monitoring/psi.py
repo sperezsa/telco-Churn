@@ -18,6 +18,7 @@ from monitoring.common import configure_console, initialize_context, previous_co
 from telco_churn.config import DEFAULT_CONFIG_PATH
 from telco_churn.evaluate import calculate_population_stability_index
 from telco_churn.monitoring_store import load_inference_logs
+from telco_churn.preprocessing import align_features_to_schema
 
 
 def _load_psi_reference(run_id: str) -> dict[str, Any]:
@@ -89,12 +90,20 @@ def evaluate_psi(config_path: Path = DEFAULT_CONFIG_PATH) -> list[dict[str, Any]
                     if key not in {"customerID", "Churn"}
                 }
             )
-        raw_features = pd.DataFrame(raw_rows)
-        transformed = model.named_steps["preprocessor"].transform(raw_features)
+        preprocessor = model.named_steps["preprocessor"]
+        expected_columns = getattr(preprocessor, "feature_names_in_", None)
+        if expected_columns is None:
+            raise ValueError(
+                f"MLflow model {model_uri} has no fitted input feature schema."
+            )
+        raw_features = align_features_to_schema(
+            pd.DataFrame(raw_rows), list(expected_columns)
+        )
+        transformed = preprocessor.transform(raw_features)
         if not isinstance(transformed, pd.DataFrame):
             transformed = pd.DataFrame(
                 transformed,
-                columns=model.named_steps["preprocessor"].get_feature_names_out(),
+                columns=preprocessor.get_feature_names_out(),
             )
 
         psi_values = calculate_population_stability_index(reference, transformed)

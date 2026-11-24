@@ -323,6 +323,10 @@ psutil==7.2.2
     # via
     #   feast
     #   ipython
+psycopg==3.3.9
+    # via telco-churn
+psycopg-binary==3.3.9 ; implementation_name != 'pypy'
+    # via psycopg
 ptyprocess==0.7.0 ; sys_platform != 'emscripten' and sys_platform != 'win32'
     # via pexpect
 pure-eval==0.2.4
@@ -419,6 +423,7 @@ sqlalchemy==2.1.4
     #   alembic
     #   feast
     #   mlflow
+    #   telco-churn
 sqlparse==0.6.0
     # via mlflow-skinny
 stack-data==0.6.3
@@ -481,7 +486,9 @@ typing-inspection==0.4.4
     #   fastapi
     #   pydantic
 tzdata==2026.4
-    # via pandas
+    # via
+    #   pandas
+    #   psycopg
 urllib3==2.8.0
     # via
     #   databricks-sdk

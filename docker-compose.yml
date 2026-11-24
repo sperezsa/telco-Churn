@@ -1,0 +1,112 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-telco_churn}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env and set POSTGRES_PASSWORD}
+      POSTGRES_DB: mlflow
+      POSTGRES_MONITORING_DB: ${POSTGRES_MONITORING_DB:-telco_monitoring}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-monitoring-db.sql:/docker-entrypoint-initdb.d/10-monitoring-db.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d mlflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  mlflow:
+    build: .
+    command:
+      - mlflow
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --backend-store-uri
+      - ${MLFLOW_BACKEND_STORE_URI:?Set MLFLOW_BACKEND_STORE_URI in .env}
+      - --artifacts-destination
+      - /mlartifacts
+      - --serve-artifacts
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_SERVER_ALLOWED_HOSTS: mlflow:5000,localhost:5000,127.0.0.1:5000
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - mlflow_artifacts:/mlartifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    build: .
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MONITORING_DATABASE_URL: ${MONITORING_DATABASE_URL:?Set MONITORING_DATABASE_URL in .env}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  trainer:
+    build: .
+    profiles: ["jobs"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      DATASET_URL: ${DATASET_URL:-https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv}
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./feature_store:/app/feature_store
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+  monitoring:
+    build: .
+    profiles: ["jobs"]
+    command: ["python", "-m", "monitoring.psi"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MONITORING_DATABASE_URL: ${MONITORING_DATABASE_URL:?Set MONITORING_DATABASE_URL in .env}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  mlflow_artifacts:

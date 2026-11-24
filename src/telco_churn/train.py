@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -96,7 +97,10 @@ def train(config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     classifier = XGBClassifier(**model_parameters)
     model = Pipeline([("preprocessor", preprocessor), ("classifier", classifier)])
 
-    mlflow.set_tracking_uri(config["mlflow"]["tracking_uri"])
+    tracking_uri = os.getenv(
+        "MLFLOW_TRACKING_URI", config["mlflow"]["tracking_uri"]
+    )
+    mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(config["mlflow"]["experiment_name"])
     with mlflow.start_run() as run:
         model.fit(X_train, y_train)

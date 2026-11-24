@@ -7,7 +7,11 @@ from telco_churn.evaluate import (
     calculate_metrics,
     calculate_population_stability_index,
 )
-from telco_churn.preprocessing import make_preprocessor, split_features_target
+from telco_churn.preprocessing import (
+    align_features_to_schema,
+    make_preprocessor,
+    split_features_target,
+)
 
 
 def test_split_features_target_excludes_target_and_identifier() -> None:
@@ -64,6 +68,34 @@ def test_preprocessor_rejects_unknown_contract_values() -> None:
 
     with pytest.raises(ValueError, match="unsupported value"):
         preprocessor.transform(pd.DataFrame({"tenure": [30], "Contract": ["Unknown"]}))
+
+
+def test_psi_orders_persisted_features_to_match_the_fitted_preprocessor() -> None:
+    """Handle inference JSON whose keys were serialized in alphabetical order."""
+    training = pd.DataFrame(
+        {
+            "gender": ["Female", "Male", "Female"],
+            "SeniorCitizen": [0, 1, 0],
+            "Partner": ["Yes", "No", "No"],
+            "Dependents": ["No", "No", "Yes"],
+            "tenure": [1, 24, 36],
+            "PhoneService": ["No", "Yes", "Yes"],
+            "MonthlyCharges": [29.85, 70.35, 89.2],
+            "TotalCharges": [29.85, 1397.5, 3254.0],
+            "Contract": ["Month-to-month", "One year", "Two year"],
+        }
+    )
+    preprocessor = make_preprocessor(training).fit(training)
+    sorted_payload = dict(sorted(training.iloc[0].to_dict().items()))
+    ordered_features = align_features_to_schema(
+        pd.DataFrame([sorted_payload]), list(preprocessor.feature_names_in_)
+    )
+
+    assert list(ordered_features.columns) == list(training.columns)
+    pd.testing.assert_frame_equal(
+        preprocessor.transform(ordered_features),
+        preprocessor.transform(training.iloc[[0]]),
+    )
 
 
 def test_calculate_metrics_uses_configured_churn_threshold() -> None:

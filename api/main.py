@@ -12,10 +12,11 @@ from pydantic import BaseModel, ConfigDict
 from sklearn.pipeline import Pipeline
 
 import mlflow
-from telco_churn.config import DEFAULT_CONFIG_PATH, load_config, project_path
+from telco_churn.config import DEFAULT_CONFIG_PATH, load_config
 from telco_churn.monitoring_store import (
     initialize_monitoring_store,
     log_inference,
+    monitoring_database_target,
 )
 
 
@@ -58,13 +59,16 @@ def create_app(model_uri: str | None = None) -> FastAPI:
     resolved_model_uri = model_uri or os.getenv(
         "MODEL_URI", f"models:/{registered_model_name}@{model_alias}"
     )
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", mlflow_config["tracking_uri"])
     decision_threshold = float(config["training"]["decision_threshold"])
-    database_path = project_path(config["monitoring"]["database_path"])
+    database_path = monitoring_database_target(
+        config["monitoring"]["database_path"]
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Load the exact versioned MLflow pipeline used for inference."""
-        mlflow.set_tracking_uri(mlflow_config["tracking_uri"])
+        mlflow.set_tracking_uri(tracking_uri)
         loaded_model = load_sklearn_model(resolved_model_uri)
         if not isinstance(loaded_model, Pipeline) or "preprocessor" not in loaded_model.named_steps:
             raise TypeError(
@@ -75,7 +79,7 @@ def create_app(model_uri: str | None = None) -> FastAPI:
         app.state.model_uri = resolved_model_uri
         app.state.model_name = registered_model_name
         app.state.model_version = str(
-            mlflow.MlflowClient().get_model_version_by_alias(
+            mlflow.MlflowClient(tracking_uri).get_model_version_by_alias(
                 registered_model_name, model_alias
             ).version
         )

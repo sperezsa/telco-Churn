@@ -1,0 +1,16 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+data
+models
+mlruns
+mlartifacts
+mlflow.db
+feature_store/data
+feature_store/registry.db
+feature_store/online_store.db
+*.py[cod]
