@@ -358,19 +358,18 @@ El workflow `.github/workflows/ci.yml` instala las dependencias desde
 `uv.lock`, ejecuta las pruebas unitarias y de integración PostgreSQL y construye
 la imagen en cada pull request y en pushes a `main`/`develop`. Tras un push a
 `main` solo, el job de despliegue se ejecuta en un runner self-hosted Windows
-del portátil. Para habilitarlo:
+en local. Para habilitarlo:
 
-1. Registra un runner self-hosted de Windows para el repositorio y mantenlo
+1. Registra en Github un runner self-hosted de Windows para el repositorio y mantenlo
    conectado con Docker Desktop en ejecución.
 2. Crea el environment `laptop` en GitHub y añade el secret
-   `COMPOSE_ENV_FILE` con el contenido completo del `.env` local (por ejemplo,
-   las líneas de `.env.example` después de reemplazar la contraseña).
+   `COMPOSE_ENV_FILE` con el contenido completo del `.env` local.
 3. Integra los cambios en `main`. El job de despliegue levanta PostgreSQL y
    MLflow, descarga los datos, vuelve a entrenar y registra el modelo, actualiza
-   la API y verifica `/health`.
+   la API y verifica con `/health`.
 
 El runner ejecuta Compose localmente, por lo que la API y MLflow quedan
-disponibles en el portátil y no se exponen credenciales a un runner alojado por
+disponibles en local y no se exponen credenciales a un runner alojado por
 GitHub. Los workflows no programan automáticamente la monitorización semanal;
 sus comandos se pueden programar posteriormente en el sistema operativo.
 
