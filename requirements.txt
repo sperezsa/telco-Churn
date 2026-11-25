@@ -143,7 +143,6 @@ importlib-metadata==9.0.1
 iniconfig==2.3.1
     # via pytest
 ipykernel==7.4.0
-    # via telco-churn
 ipython==9.17.1
     # via ipykernel
 ipython-pygments-lexers==1.1.1
@@ -407,7 +406,6 @@ scipy==1.18.1
     #   skops
     #   xgboost
 seaborn==0.13.2
-    # via telco-churn
 shap==0.52.0
     # via telco-churn
 six==1.17.0

@@ -167,6 +167,9 @@ Esté método arroja un volumen de `36` Falsos Negativos (Clientes Perdidos) que
 El proyecto requiere Python 3.13 y [uv](https://docs.astral.sh/uv/). `uv sync`
 crea/reutiliza `.venv` y sincroniza las versiones fijadas en `uv.lock`.
 
+Las dependencias de desarrollo y del notebook, como `ipykernel` y `seaborn`,
+se instalan en el entorno local; la imagen Docker las omite con `--no-dev`.
+
 En Windows PowerShell:
 
 ```powershell
