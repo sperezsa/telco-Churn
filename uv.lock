@@ -3454,7 +3454,6 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "feast" },
-    { name = "ipykernel" },
     { name = "joblib" },
     { name = "matplotlib" },
     { name = "mlflow" },
@@ -3463,7 +3462,6 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pyyaml" },
     { name = "scikit-learn" },
-    { name = "seaborn" },
     { name = "shap" },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
@@ -3472,14 +3470,15 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "ipykernel" },
     { name = "pytest" },
+    { name = "seaborn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "feast", specifier = ">=0.57.0" },
-    { name = "ipykernel", specifier = ">=7.4.0" },
     { name = "joblib", specifier = ">=1.4.0" },
     { name = "matplotlib", specifier = ">=3.11.2" },
     { name = "mlflow", specifier = ">=3.0.0" },
@@ -3488,7 +3487,6 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=19.0.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
-    { name = "seaborn", specifier = ">=0.13.2" },
     { name = "shap", specifier = ">=0.52.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "uvicorn", specifier = ">=0.34.0" },
@@ -3496,7 +3494,11 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0.0" }]
+dev = [
+    { name = "ipykernel", specifier = ">=7.4.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "seaborn", specifier = ">=0.13.2" },
+]
 
 [[package]]
 name = "tenacity"

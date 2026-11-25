@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM ghcr.io/astral-sh/uv:0.12.21 AS uv
 
 FROM python:3.13-slim
@@ -16,7 +18,8 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 # This model runs on CPU; its Linux XGBoost dependency does not need the NCCL GPU runtime.
-RUN uv sync --frozen --no-dev --no-install-project --no-install-package nvidia-nccl-cu13
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv sync --frozen --no-dev --no-install-project --no-install-package nvidia-nccl-cu13
 
 COPY README.md ./
 COPY src ./src
@@ -25,7 +28,8 @@ COPY monitoring ./monitoring
 COPY config ./config
 COPY feature_store ./feature_store
 
-RUN uv sync --frozen --no-dev --no-install-package nvidia-nccl-cu13
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv sync --frozen --no-dev --no-install-package nvidia-nccl-cu13
 
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
